@@ -14,8 +14,7 @@ class LanguageBatchBo
      */
     public static function generateLanguageFiles()
     {
-        $generator = new Generator\Applications;
-        $generator->generate();
+        self::executeGeneration(new Generator\Applications);
     }
 
     /**
@@ -27,7 +26,11 @@ class LanguageBatchBo
      */
     public static function generateAppletLanguageXmlFiles()
     {
-        $generator = new Generator\Applets;
+        self::executeGeneration(new Generator\Applets);
+    }
+
+    protected static function executeGeneration(Generator\GeneratorInterface $generator)
+    {
         $generator->generate();
     }
 }

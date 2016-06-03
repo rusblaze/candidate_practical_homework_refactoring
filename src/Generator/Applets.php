@@ -4,7 +4,8 @@ namespace Language\Generator;
 
 use Language\Log;
 use Language\Config;
-use Language\ApiCall;
+use Language\Api\Requester;
+use Language\Api\RequestType;
 
 /**
  * Business logic related to generating language files.
@@ -23,7 +24,43 @@ class Applets implements GeneratorInterface
     public function __construct()
     {
         $this->logger = Log\LoggerFactory::get(self::LOGGER_NAME);
+        $this->apiRequester = new Requester;
     }
+
+    protected function getApplets()
+    {
+        // List of the applets [directory => applet_id].
+        $applets = [
+            'memberapplet' => 'JSM2_MemberApplet',
+        ];
+        $appletsConfig = [];
+        $cachePathRoot = Config::get('system.paths.root') . '/cache/flash';
+
+        foreach ($applets as $applet => $appletLanguageId) {
+            try {
+                $languages = $this->apiRequester->getAppletLanguages($appletLanguageId);
+            } catch (\Language\Api\Exception $ae) {
+                $this->logger->addError($ae->getMessage());
+            }
+            if (empty($languages)) {
+                $this->logger->addError('There is no available languages for the ' . $appletLanguageId . ' applet.');
+                break;
+            }
+
+            $paths = [];
+            foreach ($languages as $language) {
+                $paths[$language] = $cachePathRoot . '/lang_' . $language . '.xml';
+            }
+            $appletsConfig[$applet] = [
+                'id' => $appletLanguageId,
+                'languages' => $languages,
+                'cache_paths' => $paths,
+            ];
+        }
+
+        return $appletsConfig;
+    }
+
     /**
      * Gets the language files for the applet and puts them into the cache.
      *
@@ -33,127 +70,31 @@ class Applets implements GeneratorInterface
      */
     public function generate()
     {
-        // List of the applets [directory => applet_id].
-        $applets = [
-            'memberapplet' => 'JSM2_MemberApplet',
-        ];
+        $this->logger->addInfo("Generating applet language XMLs...");
+        $writer = new \Language\Writer\FileWriter;
 
-        $this->logger->addInfo("Getting applet language XMLs..");
+        $applets = $this->getApplets();
+        foreach ($applets as $applet => $config) {
+            $this->logger->addInfo("[APPLET: " . $applet . "]");
+            $languages = $config['languages'];
+            $paths = $config['cache_paths'];
+            $appletLanguageId = $config['id'];
 
-        foreach ($applets as $appletDirectory => $appletLanguageId) {
-            $this->logger->addInfo(" Getting > $appletLanguageId ($appletDirectory) language xmls..");
-            $languages = $this->getAppletLanguages($appletLanguageId);
-            if (empty($languages)) {
-                throw new \Exception('There is no available languages for the ' . $appletLanguageId . ' applet.');
-            }
-            else {
-                $this->logger->addInfo(' - Available languages: ' . implode(', ', $languages));
-            }
-            $path = Config::get('system.paths.root') . '/cache/flash';
             foreach ($languages as $language) {
-                $xmlContent = $this->getAppletLanguageFile($appletLanguageId, $language);
-                $xmlFile    = $path . '/lang_' . $language . '.xml';
-                if (strlen($xmlContent) == file_put_contents($xmlFile, $xmlContent)) {
-                    $this->logger->addInfo(" OK saving $xmlFile was successful.");
-                }
-                else {
-                    throw new \Exception('Unable to save applet: (' . $appletLanguageId . ') language: (' . $language
-                        . ') xml (' . $xmlFile . ')!');
+                $this->logger->addInfo("\t[LANGUAGE: " . $language . "]");
+                try {
+                    $content = $this->apiRequester->getLanguageFileContent(RequestType::APPLET, $appletLanguageId, $language);
+                    $file = $paths[$language];
+                    $writer->writeFile($content, $file);
+                    $this->logger->addInfo("\t\tOK.");
+                } catch (\Language\Api\Exception $ae) {
+                    $this->logger->addError($ae->getMessage());
+                } catch (\Language\Writer\Exception $we) {
+                    $this->logger->addError($we->getMessage());
                 }
             }
-            $this->logger->addInfo(" < $appletLanguageId ($appletDirectory) language xml cached.");
         }
 
         $this->logger->addInfo("Applet language XMLs generated.");
-    }
-
-    /**
-     * Gets the available languages for the given applet.
-     *
-     * @param string $applet   The applet identifier.
-     *
-     * @return array   The list of the available applet languages.
-     */
-    protected function getAppletLanguages($applet)
-    {
-        $result = ApiCall::call(
-            'system_api',
-            'language_api',
-            [
-                'system' => 'LanguageFiles',
-                'action' => 'getAppletLanguages',
-            ],
-            ['applet' => $applet]
-        );
-
-        try {
-            $this->checkForApiErrorResult($result);
-        } catch (\Exception $e) {
-            throw new \Exception('Getting languages for applet (' . $applet . ') was unsuccessful ' . $e->getMessage());
-        }
-
-        return $result['data'];
-    }
-
-
-    /**
-     * Gets a language xml for an applet.
-     *
-     * @param string $applet      The identifier of the applet.
-     * @param string $language    The language identifier.
-     *
-     * @return string|false   The content of the language file or false if weren't able to get it.
-     */
-    protected function getAppletLanguageFile($applet, $language)
-    {
-        $result = ApiCall::call(
-            'system_api',
-            'language_api',
-            [
-                'system' => 'LanguageFiles',
-                'action' => 'getAppletLanguageFile',
-            ],
-            [
-                'applet' => $applet,
-                'language' => $language,
-            ]
-        );
-
-        try {
-            $this->checkForApiErrorResult($result);
-        } catch (\Exception $e) {
-            throw new \Exception('Getting language xml for applet: (' . $applet . ') on language: (' . $language . ') was unsuccessful: '
-                . $e->getMessage());
-        }
-
-        return $result['data'];
-    }
-
-    /**
-     * Checks the api call result.
-     *
-     * @param mixed  $result   The api call result to check.
-     *
-     * @throws Exception   If the api call was not successful.
-     *
-     * @return void
-     */
-    protected function checkForApiErrorResult($result)
-    {
-        // Error during the api call.
-        if ($result === false || !isset($result['status'])) {
-            throw new \Exception('Error during the api call');
-        }
-        // Wrong response.
-        if ($result['status'] != 'OK') {
-            throw new \Exception('Wrong response: '
-                . (!empty($result['error_type']) ? 'Type(' . $result['error_type'] . ') ' : '')
-                . (!empty($result['error_code']) ? 'Code(' . $result['error_code'] . ') ' : '')
-                . ((string)$result['data']));
-        }
-        // Wrong content.
-        if ($result['data'] === false) {
-            throw new \Exception('Wrong content!');
-        }
     }
 }
