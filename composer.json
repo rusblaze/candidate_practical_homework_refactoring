@@ -4,6 +4,9 @@
     "require": {
         "phpunit/phpunit": "4.7.*"
     },
+    "require-dev": {
+        "monolog/monolog": "^1.19"
+    },
     "autoload": {
         "psr-4": {"Language\\": "src/"}
     }
